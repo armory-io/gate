@@ -16,7 +16,7 @@
 
 package com.netflix.spinnaker.gate.security.oauth2
 
-import com.fasterxml.jackson.databind.ObjectMapper
+
 import com.netflix.spinnaker.gate.security.AllowedAccountsSupport
 import com.netflix.spinnaker.gate.security.oauth2.provider.SpinnakerProviderTokenServices
 import com.netflix.spinnaker.gate.services.CredentialsService
@@ -26,7 +26,6 @@ import com.netflix.spinnaker.security.User
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.security.oauth2.resource.ResourceServerProperties
-import org.springframework.boot.autoconfigure.security.oauth2.resource.UserInfoTokenServices
 import org.springframework.security.authentication.BadCredentialsException
 import org.springframework.security.core.AuthenticationException
 import org.springframework.security.oauth2.common.OAuth2AccessToken
@@ -53,7 +52,7 @@ class SpinnakerUserInfoTokenServices implements ResourceServerTokenServices {
   ResourceServerProperties sso
 
   @Autowired
-  UserInfoTokenServices userInfoTokenServices
+  ResourceServerTokenServices tokenServices
 
   @Autowired
   CredentialsService credentialsService
@@ -78,7 +77,7 @@ class SpinnakerUserInfoTokenServices implements ResourceServerTokenServices {
 
   @Override
   OAuth2Authentication loadAuthentication(String accessToken) throws AuthenticationException, InvalidTokenException {
-    OAuth2Authentication oAuth2Authentication = userInfoTokenServices.loadAuthentication(accessToken)
+    OAuth2Authentication oAuth2Authentication = tokenServices.loadAuthentication(accessToken)
 
     Map details = oAuth2Authentication.userAuthentication.details as Map
 
@@ -127,7 +126,7 @@ class SpinnakerUserInfoTokenServices implements ResourceServerTokenServices {
 
   @Override
   OAuth2AccessToken readAccessToken(String accessToken) {
-    return userInfoTokenServices.readAccessToken(accessToken)
+    return tokenServices.readAccessToken(accessToken)
   }
 
   boolean isServiceAccount(Map details) {

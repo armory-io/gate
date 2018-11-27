@@ -1,5 +1,6 @@
 dependencies {
   compile project(":gate-core")
-  compile 'org.springframework.security.oauth:spring-security-oauth2:2.1.1.RELEASE'
+  compile 'org.springframework.security.oauth:spring-security-oauth2:2.1.3.RELEASE'
+  compile 'org.springframework.security:spring-security-jwt:1.0.9.RELEASE'
   compile 'com.squareup.retrofit:converter-simplexml:1.9.0' // Github OAuth
 }

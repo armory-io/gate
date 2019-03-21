@@ -20,6 +20,7 @@ import com.netflix.spinnaker.gate.config.AuthConfig
 import com.netflix.spinnaker.gate.security.MultiAuthConfigurer
 import com.netflix.spinnaker.gate.security.SpinnakerAuthConfig
 import com.netflix.spinnaker.gate.security.SuppportsMultiAuth
+import com.netflix.spinnaker.gate.security.x509.proxy.X509ProxyAuthenticationFilter
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -37,6 +38,7 @@ import org.springframework.security.config.annotation.web.configuration.WebSecur
 import org.springframework.security.core.Authentication
 import org.springframework.security.core.AuthenticationException
 import org.springframework.security.core.context.SecurityContext
+import org.springframework.security.web.authentication.preauth.x509.X509AuthenticationFilter
 import org.springframework.security.web.context.HttpRequestResponseHolder
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository
 import org.springframework.security.web.context.NullSecurityContextRepository
@@ -63,11 +65,20 @@ class X509Config implements MultiAuthConfigurer {
   @Autowired
   X509AuthenticationUserDetailsService x509AuthenticationUserDetailsService
 
+  // Authentication filter to enable X509 behind a proxy where certificates could be sent
+  // as an HTTP header.
+  @Autowired
+  Optional<X509ProxyAuthenticationFilter> x509ProxyAuthenticationFilter
+
+
   void configure(HttpSecurity http) {
     http.x509().authenticationUserDetailsService(x509AuthenticationUserDetailsService)
 
     if (subjectPrincipalRegex) {
       http.x509().subjectPrincipalRegex(subjectPrincipalRegex)
+    }
+    if (x509ProxyAuthenticationFilter.isPresent()) {
+      http.addFilterBefore(x509ProxyAuthenticationFilter.get(), X509AuthenticationFilter.class)
     }
   }
 

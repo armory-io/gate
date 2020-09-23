@@ -26,6 +26,8 @@ allprojects {
     }
 
     dependencies {
+      implementation(platform("org.springframework.boot:spring-boot-dependencies:2.2.10.RELEASE"))
+
       implementation platform("com.netflix.spinnaker.kork:kork-bom:$korkVersion")
       annotationProcessor platform("com.netflix.spinnaker.kork:kork-bom:$korkVersion")
       annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")

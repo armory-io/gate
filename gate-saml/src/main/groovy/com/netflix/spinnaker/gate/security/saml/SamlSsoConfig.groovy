@@ -21,22 +21,15 @@ import com.netflix.spinnaker.fiat.shared.FiatClientConfigurationProperties
 import com.netflix.spinnaker.gate.config.AuthConfig
 import com.netflix.spinnaker.gate.security.AllowedAccountsSupport
 import com.netflix.spinnaker.gate.security.SpinnakerAuthConfig
-import com.netflix.spinnaker.gate.security.saml.spring.DefaultSaml2AuthenticatedPrincipal
 import com.netflix.spinnaker.gate.security.saml.spring.RelyingPartyRegistrations
 import com.netflix.spinnaker.gate.security.saml.spring.SpinnakerSaml2Authentication
 import com.netflix.spinnaker.gate.services.PermissionService
 import com.netflix.spinnaker.kork.core.RetrySupport
-import com.netflix.spinnaker.security.User
+import com.netflix.spinnaker.security.AllowedAccountsAuthorities
 import groovy.util.logging.Slf4j
 import org.opensaml.core.config.ConfigurationService
 import org.opensaml.core.xml.XMLObject
-import org.opensaml.core.xml.schema.XSAny
-import org.opensaml.core.xml.schema.XSBoolean
-import org.opensaml.core.xml.schema.XSBooleanValue
-import org.opensaml.core.xml.schema.XSDateTime
-import org.opensaml.core.xml.schema.XSInteger
-import org.opensaml.core.xml.schema.XSString
-import org.opensaml.core.xml.schema.XSURI
+import org.opensaml.core.xml.schema.*
 import org.opensaml.saml.saml2.core.Assertion
 import org.opensaml.saml.saml2.core.Attribute
 import org.opensaml.saml.saml2.core.AttributeStatement
@@ -53,21 +46,17 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.core.convert.converter.Converter
 import org.springframework.security.authentication.AbstractAuthenticationToken
 import org.springframework.security.authentication.BadCredentialsException
-import org.springframework.security.authentication.ProviderManager
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.builders.WebSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter
 import org.springframework.security.core.GrantedAuthority
 import org.springframework.security.core.authority.AuthorityUtils
-import org.springframework.security.core.authority.SimpleGrantedAuthority
 import org.springframework.security.core.userdetails.UserDetails
 import org.springframework.security.core.userdetails.UserDetailsService
 import org.springframework.security.core.userdetails.UsernameNotFoundException
 import org.springframework.security.saml2.provider.service.authentication.OpenSamlAuthenticationProvider
 import org.springframework.security.saml2.provider.service.authentication.OpenSamlAuthenticationRequestFactory
-import org.springframework.security.saml2.provider.service.authentication.Saml2Authentication
 import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticationRequestFactory
 import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticationToken
 import org.springframework.security.saml2.provider.service.registration.InMemoryRelyingPartyRegistrationRepository
@@ -164,9 +153,6 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
 
   @Autowired
   SAMLSecurityConfigProperties samlSecurityConfigProperties
-
-  @Autowired
-  UserDetailsService samlUserDetailsService
 
   public static class ResponseToken {
 
@@ -292,13 +278,15 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
     authConfig.configure(web)
   }
 
-  @Bean
-  RememberMeServices rememberMeServices(UserDetailsService userDetailsService) {
-    TokenBasedRememberMeServices rememberMeServices = new TokenBasedRememberMeServices("password", userDetailsService)
-    rememberMeServices.setCookieName("cookieName")
-    rememberMeServices.setParameter("rememberMe")
-    rememberMeServices
-  }
+  //NOT sure this can work with SAML... at least... not yet?  Looking through the DSL, I don't think this ever worked for saml...
+  //  TODO: figure out remember me stuff
+//  @Bean
+//  RememberMeServices rememberMeServices() {
+//    TokenBasedRememberMeServices rememberMeServices = new TokenBasedRememberMeServices("password", userDetailsService)
+//    rememberMeServices.setCookieName("cookieName")
+//    rememberMeServices.setParameter("rememberMe")
+//    rememberMeServices
+//  }
 
   RelyingPartyRegistrationRepository relyingPartyRegistrationRepository() {
     RelyingPartyRegistration relyingPartyRegistration =
@@ -377,14 +365,22 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
       registry.counter(id).increment()
     }
     def userAttributeMapping = samlSecurityConfigProperties.userAttributeMapping;
-    return new User(
-      email: email,
-      firstName: attributes[userAttributeMapping.firstName]?.get(0),
-      lastName: attributes[userAttributeMapping.lastName]?.get(0),
-      roles: roles,
-      allowedAccounts: allowedAccountsSupport.filterAllowedAccounts(username, roles),
-      username: username
+    // We lose the email, firstname, lastname stuff here... and allowedAccounts is translated into granted authorities.
+    // TODO:  Dynamic account impacts
+    // DOWNSIDE:  What about if we do dynamic accounts with roles?  We'd NOT be getting a consistent list UNLESS we store
+    // roles instead of granted accounts here, as this is persistent!!!
+    return new org.springframework.security.core.userdetails.User(
+      username, "",
+      AllowedAccountsAuthorities.buildAllowedAccounts(allowedAccountsSupport.filterAllowedAccounts(username, roles))
     )
+//    return new User(
+//      email: email,
+//      firstName: attributes[userAttributeMapping.firstName]?.get(0),
+//      lastName: attributes[userAttributeMapping.lastName]?.get(0),
+//      roles: roles,
+//      allowedAccounts: allowedAccountsSupport.filterAllowedAccounts(username, roles),
+//      username: username
+//    )
   }
 
 

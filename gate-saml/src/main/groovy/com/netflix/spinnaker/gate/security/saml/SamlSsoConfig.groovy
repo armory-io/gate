@@ -23,9 +23,12 @@ import com.netflix.spinnaker.gate.security.AllowedAccountsSupport
 import com.netflix.spinnaker.gate.security.SpinnakerAuthConfig
 import com.netflix.spinnaker.gate.security.saml.spring.DefaultSaml2AuthenticatedPrincipal
 import com.netflix.spinnaker.gate.security.saml.spring.RelyingPartyRegistrations
+import com.netflix.spinnaker.gate.security.saml.spring.SpinnakerSaml2Authentication
 import com.netflix.spinnaker.gate.services.PermissionService
 import com.netflix.spinnaker.kork.core.RetrySupport
+import com.netflix.spinnaker.security.User
 import groovy.util.logging.Slf4j
+import org.opensaml.core.config.ConfigurationService
 import org.opensaml.core.xml.XMLObject
 import org.opensaml.core.xml.schema.XSAny
 import org.opensaml.core.xml.schema.XSBoolean
@@ -38,6 +41,8 @@ import org.opensaml.saml.saml2.core.Assertion
 import org.opensaml.saml.saml2.core.Attribute
 import org.opensaml.saml.saml2.core.AttributeStatement
 import org.opensaml.saml.saml2.core.Response
+import org.opensaml.xmlsec.SignatureSigningConfiguration
+import org.opensaml.xmlsec.impl.BasicSignatureSigningConfiguration
 import org.opensaml.xmlsec.signature.support.SignatureConstants
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression
@@ -46,6 +51,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.core.convert.converter.Converter
+import org.springframework.security.authentication.AbstractAuthenticationToken
 import org.springframework.security.authentication.BadCredentialsException
 import org.springframework.security.authentication.ProviderManager
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken
@@ -53,12 +59,16 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.builders.WebSecurity
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity
 import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter
+import org.springframework.security.core.GrantedAuthority
+import org.springframework.security.core.authority.AuthorityUtils
 import org.springframework.security.core.authority.SimpleGrantedAuthority
-import org.springframework.security.core.userdetails.User
+import org.springframework.security.core.userdetails.UserDetails
 import org.springframework.security.core.userdetails.UserDetailsService
 import org.springframework.security.core.userdetails.UsernameNotFoundException
 import org.springframework.security.saml2.provider.service.authentication.OpenSamlAuthenticationProvider
+import org.springframework.security.saml2.provider.service.authentication.OpenSamlAuthenticationRequestFactory
 import org.springframework.security.saml2.provider.service.authentication.Saml2Authentication
+import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticationRequestFactory
 import org.springframework.security.saml2.provider.service.authentication.Saml2AuthenticationToken
 import org.springframework.security.saml2.provider.service.registration.InMemoryRelyingPartyRegistrationRepository
 import org.springframework.security.saml2.provider.service.registration.RelyingPartyRegistration
@@ -71,6 +81,7 @@ import org.springframework.util.CollectionUtils
 
 import javax.annotation.PostConstruct
 import java.security.KeyStore
+import java.time.Duration
 import java.time.Instant
 
 @ConditionalOnExpression('${saml.enabled:false}')
@@ -149,8 +160,6 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
     String lastName = "User.LastName"
     String roles = "memberOf"
     String rolesDelimiter = ";"
-    String username
-    String email
   }
 
   @Autowired
@@ -179,16 +188,19 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
     }
 
   }
-
-  static Converter<ResponseToken, Saml2Authentication> createDefaultResponseAuthenticationConverter() {
+  // LIKELY can move all of these converts and such into a custom saml handler...
+  static Converter<ResponseToken, AbstractAuthenticationToken> createDefaultResponseAuthenticationConverter() {
     return { responseToken ->
       Saml2AuthenticationToken token = responseToken.token;
       Response response = responseToken.response;
       Assertion assertion = CollectionUtils.firstElement(response.getAssertions());
       String username = assertion.getSubject().getNameID().getValue();
       Map<String, List<Object>> attributes = getAssertionAttributes(assertion);
-      return new Saml2Authentication(new DefaultSaml2AuthenticatedPrincipal(username, attributes),
-        token.getSaml2Response(), Collections.singleton(new SimpleGrantedAuthority("ROLE_USER")));
+      def userAttributeMapping = samlSecurityConfigProperties.userAttributeMapping;
+      def roles = extractRoles(attributes, userAttributeMapping)
+      def userObject = loadUserByUsername(username, roles)
+      return new SpinnakerSaml2Authentication(userObject,
+        token.getSaml2Response(), roles);
     };
   }
 
@@ -236,16 +248,18 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
   @Override
   void configure(HttpSecurity http) {
     //We need our session cookie to come across when we get redirected back from the IdP:
-    defaultCookieSerializer.setSameSite(null)
-    authConfig.configure(http)
+    defaultCookieSerializer.setSameSite(null);
+    authConfig.configure(http);
 
     OpenSamlAuthenticationProvider authenticationProvider = new OpenSamlAuthenticationProvider();
     authenticationProvider.setAuthoritiesExtractor(createDefaultResponseAuthenticationConverter());
     http
-      .rememberMe().rememberMeServices(rememberMeServices(userDetailsService()))
-    http
-      .authorizeRequests({ authz -> authz.anyRequest().authenticated() })
-      .authenticationProvider(authenticationProvider)
+      .authorizeRequests()
+      .anyRequest().authenticated()
+      .and()
+      .saml2Login()
+      .relyingPartyRegistrationRepository(relyingPartyRegistrationRepository());
+    ;
     initSignatureDigest() // Need to be after SAMLConfigurer initializes the global SecurityConfiguration
 
     // @formatter:on
@@ -253,30 +267,33 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
   }
 
   private void initSignatureDigest() {
-    def secConfig = org.opensaml.Configuration.getGlobalSecurityConfiguration()
-    if (secConfig != null && secConfig instanceof BasicSecurityConfiguration) {
-      BasicSecurityConfiguration basicSecConfig = (BasicSecurityConfiguration) secConfig
+    def signingConfig = ConfigurationService.get(SignatureSigningConfiguration.class);
+    if (signingConfig != null && signingConfig instanceof BasicSignatureSigningConfiguration) {
+      BasicSignatureSigningConfiguration basicSecConfig = (BasicSignatureSigningConfiguration) signingConfig
       def algo = SignatureAlgorithms.fromName(samlSecurityConfigProperties.signatureDigest)
       log.info("Using ${algo} digest for signing SAML messages")
-      basicSecConfig.registerSignatureAlgorithmURI("RSA", algo.rsaSignatureMethod)
-      basicSecConfig.setSignatureReferenceDigestMethod(algo.digestMethod)
+      signingConfig.setSignatureAlgorithms(algo.rsaSignatureMethod);
+      signingConfig.setSignatureReferenceDigestMethods(algo.digestMethod);
     } else {
       log.warn("Unable to find global BasicSecurityConfiguration (found '${secConfig}'). Ignoring signatureDigest configuration value.")
     }
   }
 
+  @Bean
+  Saml2AuthenticationRequestFactory authenticationRequestFactory() {
+    OpenSamlAuthenticationRequestFactory authenticationRequestFactory =
+      new OpenSamlAuthenticationRequestFactory();
+    authenticationRequestFactory.setProtocolBinding("urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect");
+    return authenticationRequestFactory;
+  }
+
+  @Override
   void configure(WebSecurity web) throws Exception {
     authConfig.configure(web)
   }
 
-  public WebSSOProfileConsumerImpl getWebSSOProfileConsumerImpl() {
-    WebSSOProfileConsumerImpl profileConsumer = new WebSSOProfileConsumerImpl();
-    profileConsumer.setMaxAuthenticationAge(samlSecurityConfigProperties.maxAuthenticationAge);
-    return profileConsumer;
-  }
-
   @Bean
-  public RememberMeServices rememberMeServices(UserDetailsService userDetailsService) {
+  RememberMeServices rememberMeServices(UserDetailsService userDetailsService) {
     TokenBasedRememberMeServices rememberMeServices = new TokenBasedRememberMeServices("password", userDetailsService)
     rememberMeServices.setCookieName("cookieName")
     rememberMeServices.setParameter("rememberMe")
@@ -287,120 +304,89 @@ class SamlSsoConfig extends WebSecurityConfigurerAdapter {
     RelyingPartyRegistration relyingPartyRegistration =
       RelyingPartyRegistrations.fromMetadataLocation(
         "https://armory.okta.com/app/exk7dma3uxKN4j4KW2p7/sso/saml/metadata")
+        .assertingPartyDetails({ party -> party.wantAuthnRequestsSigned(false) })
       /*                       .assertingPartyDetails(party -> party
                                      .singleSignOnServiceLocation("https://armory.okta.com/app/armory_zachsmithspinnaker_1/exk7dma3uxKN4j4KW2p7/sso/saml"))
                                      */
+        .assertionConsumerServiceLocation("{baseUrl}/saml/SSO")
         .build();
     return new InMemoryRelyingPartyRegistrationRepository(relyingPartyRegistration);
   }
 
-  @Bean
-  UserDetailsService samlUserDetailsService() {
-    // TODO(ttomsu): This is a NFLX specific user extractor. Make a more generic one?
-    new UserDetailsService() {
-
-      @Autowired
-      PermissionService permissionService
-
-      @Autowired
-      AllowedAccountsSupport allowedAccountsSupport
-
-      @Autowired
-      FiatClientConfigurationProperties fiatClientConfigurationProperties
-
-      @Autowired
-      Registry registry
-
-      RetrySupport retrySupport = new RetrySupport()
-
-      @Override
-      User loadUserByUsername(String username) throws UsernameNotFoundException {
-        def assertion = credential.authenticationAssertion
-        def attributes = extractAttributes(assertion)
-        def userAttributeMapping = samlSecurityConfigProperties.userAttributeMapping
-
-        def subjectNameId = assertion.getSubject().nameID.value
-        def email = attributes[userAttributeMapping.email]?.get(0) ?: subjectNameId
-        def roles = extractRoles(email, attributes, userAttributeMapping)
-
-        if (samlSecurityConfigProperties.requiredRoles) {
-          if (!samlSecurityConfigProperties.requiredRoles.any { it in roles }) {
-            throw new BadCredentialsException("User $email does not have all roles $samlSecurityConfigProperties.requiredRoles")
-          }
-        }
-
-        def id = registry
-          .createId("fiat.login")
-          .withTag("type", "saml")
-
-        try {
-          retrySupport.retry({ ->
-            permissionService.loginWithRoles(username, roles)
-          }, 5, 2000, false)
-
-          log.debug("Successful SAML authentication (user: {}, roleCount: {}, roles: {})", username, roles.size(), roles)
-          id = id.withTag("success", true).withTag("fallback", "none")
-        } catch (Exception e) {
-          log.debug(
-            "Unsuccessful SAML authentication (user: {}, roleCount: {}, roles: {}, legacyFallback: {})",
-            username,
-            roles.size(),
-            roles,
-            fiatClientConfigurationProperties.legacyFallback,
-            e
-          )
-          id = id.withTag("success", false).withTag("fallback", fiatClientConfigurationProperties.legacyFallback)
-
-          if (!fiatClientConfigurationProperties.legacyFallback) {
-            throw e
-          }
-        } finally {
-          registry.counter(id).increment()
-        }
-
-        return new User(
-          email: email,
-          firstName: attributes[userAttributeMapping.firstName]?.get(0),
-          lastName: attributes[userAttributeMapping.lastName]?.get(0),
-          roles: roles,
-          allowedAccounts: allowedAccountsSupport.filterAllowedAccounts(username, roles),
-          username: username
-        )
+  private Set<GrantedAuthority> extractRoles(Map<String, List<Object>> attributes,
+                                             UserAttributeMapping userAttributeMapping) {
+    def assertionRoles = attributes[userAttributeMapping.roles].collect { String roles ->
+      def commonNames = roles.split(userAttributeMapping.rolesDelimiter)
+      commonNames.collect {
+        return it.indexOf("CN=") < 0 ? it : it.substring(it.indexOf("CN=") + 3, it.indexOf(","))
       }
+    }.flatten()*.toLowerCase() as Set<String>
 
-      Set<String> extractRoles(String email,
-                               Map<String, List<String>> attributes,
-                               UserAttributeMapping userAttributeMapping) {
-        def assertionRoles = attributes[userAttributeMapping.roles].collect { String roles ->
-          def commonNames = roles.split(userAttributeMapping.rolesDelimiter)
-          commonNames.collect {
-            return it.indexOf("CN=") < 0 ? it : it.substring(it.indexOf("CN=") + 3, it.indexOf(","))
-          }
-        }.flatten()*.toLowerCase() as Set<String>
+    return AuthorityUtils.createAuthorityList(assertionRoles)
+  }
 
-        return assertionRoles
-      }
 
-      static Map<String, List<String>> extractAttributes(Assertion assertion) {
-        def attributes = [:]
-        assertion.attributeStatements*.attributes.flatten().each { Attribute attribute ->
-          def name = attribute.name
-          def values = attribute.attributeValues.findResults {
-            switch (it) {
-              case XSString:
-                return (it as XSString)?.value
-              case XSAny:
-                return (it as XSAny)?.textContent
-            }
-            return null
-          } ?: []
-          attributes[name] = values
-        }
+  @Autowired
+  PermissionService permissionService
 
-        return attributes
+  @Autowired
+  AllowedAccountsSupport allowedAccountsSupport
+
+  @Autowired
+  FiatClientConfigurationProperties fiatClientConfigurationProperties
+
+  @Autowired
+  Registry registry
+
+  RetrySupport retrySupport = new RetrySupport()
+
+  UserDetails loadUserByUsername(String username, Collection<String> roles) throws UsernameNotFoundException {
+
+    if (samlSecurityConfigProperties.requiredRoles) {
+      if (!samlSecurityConfigProperties.requiredRoles.any { it in roles }) {
+        throw new BadCredentialsException("User $email does not have all roles $samlSecurityConfigProperties.requiredRoles")
       }
     }
+
+    def id = registry
+      .createId("fiat.login")
+      .withTag("type", "saml")
+
+    try {
+      retrySupport.retry({ ->
+        permissionService.loginWithRoles(username, roles)
+      }, 5, Duration.ofSeconds(2), false)
+
+      log.debug("Successful SAML authentication (user: {}, roleCount: {}, roles: {})", username, roles.size(), roles)
+      id = id.withTag("success", true).withTag("fallback", "none")
+    } catch (Exception e) {
+      log.debug(
+        "Unsuccessful SAML authentication (user: {}, roleCount: {}, roles: {}, legacyFallback: {})",
+        username,
+        roles.size(),
+        roles,
+        fiatClientConfigurationProperties.legacyFallback,
+        e
+      )
+      id = id.withTag("success", false).withTag("fallback", fiatClientConfigurationProperties.legacyFallback)
+
+      if (!fiatClientConfigurationProperties.legacyFallback) {
+        throw e
+      }
+    } finally {
+      registry.counter(id).increment()
+    }
+    def userAttributeMapping = samlSecurityConfigProperties.userAttributeMapping;
+    return new User(
+      email: email,
+      firstName: attributes[userAttributeMapping.firstName]?.get(0),
+      lastName: attributes[userAttributeMapping.lastName]?.get(0),
+      roles: roles,
+      allowedAccounts: allowedAccountsSupport.filterAllowedAccounts(username, roles),
+      username: username
+    )
   }
+
 
   // Available digests taken from org.opensaml.xml.signature.SignatureConstants (RSA signatures)
   private enum SignatureAlgorithms {

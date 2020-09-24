@@ -42,7 +42,6 @@ public class DefaultSaml2AuthenticatedPrincipal
     return this.name;
   }
 
-  @Override
   public Map<String, List<Object>> getAttributes() {
     return this.attributes;
   }

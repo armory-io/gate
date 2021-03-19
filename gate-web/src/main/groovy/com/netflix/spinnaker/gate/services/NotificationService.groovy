@@ -22,6 +22,7 @@ import com.netflix.spinnaker.config.okhttp3.OkHttpClientProvider
 import com.netflix.spinnaker.gate.config.ServiceConfiguration
 import com.netflix.spinnaker.gate.services.internal.EchoService
 import com.netflix.spinnaker.gate.services.internal.Front50Service
+import com.netflix.spinnaker.kork.exceptions.ConfigurationException
 import com.netflix.spinnaker.kork.web.exceptions.InvalidRequestException
 import okhttp3.MediaType
 import okhttp3.OkHttpClient
@@ -31,6 +32,7 @@ import okhttp3.Response
 import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.http.RequestEntity
@@ -51,23 +53,24 @@ class NotificationService {
   private EchoService echoService
 
   private OkHttpClient echoOkHttpClient
-  private OkHttpClient keelOkHttpClient
+  private Optional<OkHttpClient> keelOkHttpClient
   private Endpoint echoEndpoint
-  private Endpoint keelEndpoint
+  private Optional<Endpoint> keelEndpoint
 
   NotificationService(@Autowired(required = false) Front50Service front50Service,
                       @Autowired OkHttpClientProvider okHttpClientProvider,
                       @Autowired ServiceConfiguration serviceConfiguration,
-                      @Autowired(required = false) EchoService echoService) {
+                      @Autowired(required = false) EchoService echoService,
+                      @Value('${services.keel.enabled:false}') boolean isKeelEnabled) {
     this.front50Service = front50Service
     this.echoService = echoService
     // We use the "raw" OkHttpClient here instead of EchoService because retrofit messes up with the encoding
     // of the body for the x-www-form-urlencoded content type, which is what Slack uses. This allows us to pass
     // the original body unmodified along to echo.
     this.echoEndpoint = serviceConfiguration.getServiceEndpoint("echo")
-    this.keelEndpoint = serviceConfiguration.getServiceEndpoint("keel")
+    this.keelEndpoint = isKeelEnabled ? Optional.of(serviceConfiguration.getServiceEndpoint("keel")) : Optional.empty() as Optional<Endpoint>
     this.echoOkHttpClient =  okHttpClientProvider.getClient(new DefaultServiceEndpoint("echo", echoEndpoint.url))
-    this.keelOkHttpClient =  okHttpClientProvider.getClient(new DefaultServiceEndpoint("keel", keelEndpoint.url))
+    this.keelOkHttpClient = isKeelEnabled ? Optional.of(okHttpClientProvider.getClient(new DefaultServiceEndpoint("keel", keelEndpoint.get().url))) : Optional.empty() as Optional<OkHttpClient>
   }
 
   Map getNotificationConfigs(String type, String app) {
@@ -111,8 +114,11 @@ class NotificationService {
 
     // If the call is coming from ManagedController, use keel client and keel endpoint instead of echo
     if (service == "keel") {
-      endpointToUse = keelEndpoint
-      clientToUse = keelOkHttpClient
+      if (!keelEndpoint.isPresent() || !keelOkHttpClient.isPresent()) {
+        throw new ConfigurationException("Keel is not enabled in configuration. Enable it in services.keel.enabled")
+      }
+      endpointToUse = keelEndpoint.get()
+      clientToUse = keelOkHttpClient.get()
       path = "/slack/notifications/callbacks"
     }
 

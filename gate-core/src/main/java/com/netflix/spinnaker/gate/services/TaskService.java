@@ -21,6 +21,11 @@ import com.netflix.spinnaker.gate.services.internal.ClouddriverServiceSelector;
 import com.netflix.spinnaker.gate.services.internal.OrcaServiceSelector;
 import com.netflix.spinnaker.security.AuthenticatedRequest;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import javax.annotation.PreDestroy;
 import lombok.Data;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +42,8 @@ public class TaskService {
   private ClouddriverServiceSelector clouddriverServiceSelector;
   private TaskServiceProperties taskServiceProperties;
 
+  private static final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
   @Autowired
   public TaskService(
       OrcaServiceSelector orcaServiceSelector,
@@ -45,6 +52,11 @@ public class TaskService {
     this.orcaServiceSelector = orcaServiceSelector;
     this.clouddriverServiceSelector = clouddriverServiceSelector;
     this.taskServiceProperties = taskServiceProperties;
+  }
+
+  @PreDestroy
+  protected void shutdown() {
+    scheduler.shutdown();
   }
 
   public Map create(Map body) {
@@ -111,20 +123,38 @@ public class TaskService {
     LinkedHashMap<String, String> map = new LinkedHashMap<String, String>(1);
     map.put("id", taskId);
     Map task = map;
-    for (int i = 0; i < maxPolls; i++) {
-      try {
-        Thread.sleep(intervalMs);
-      } catch (InterruptedException ignored) {
-      }
 
-      task = getTask(taskId);
-      if (new ArrayList<>(Arrays.asList("SUCCEEDED", "TERMINAL"))
-          .contains((String) task.get("status"))) {
-        return task;
-      }
+    CompletableFuture<Map<String, String>> pollerTask = new CompletableFuture<>();
+    Runnable poller =
+        new Runnable() {
+          private int polls = 0;
+
+          @Override
+          public void run() {
+            if (polls >= maxPolls) {
+              pollerTask.complete(task);
+              return;
+            }
+            polls++;
+            Map<String, String> currentTask = getTask(taskId);
+            if (Arrays.asList("SUCCEEDED", "TERMINAL").contains(currentTask.get("status"))) {
+              pollerTask.complete(currentTask);
+            } else if (polls >= maxPolls) {
+              pollerTask.complete(currentTask);
+            }
+          }
+        };
+
+    scheduler.scheduleAtFixedRate(
+        poller, 0, intervalMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+    try {
+      return pollerTask.get();
+    } catch (InterruptedException | ExecutionException e) {
+      log.error("Error while waiting for task completion", e);
+      Thread.currentThread().interrupt();
+      return task;
     }
-
-    return task;
   }
 
   public Map createAndWaitForCompletion(Map body, int maxPolls) {

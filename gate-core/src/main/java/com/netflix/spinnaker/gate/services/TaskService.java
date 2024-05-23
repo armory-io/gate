@@ -21,6 +21,9 @@ import com.netflix.spinnaker.gate.services.internal.ClouddriverServiceSelector;
 import com.netflix.spinnaker.gate.services.internal.OrcaServiceSelector;
 import com.netflix.spinnaker.security.AuthenticatedRequest;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import lombok.Data;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +39,8 @@ public class TaskService {
   private OrcaServiceSelector orcaServiceSelector;
   private ClouddriverServiceSelector clouddriverServiceSelector;
   private TaskServiceProperties taskServiceProperties;
+
+  @Autowired ExecutorService executorService;
 
   @Autowired
   public TaskService(
@@ -132,10 +137,25 @@ public class TaskService {
   }
 
   public Map createAndWaitForCompletion(Map body) {
-    return createAndWaitForCompletion(
-        body,
-        taskServiceProperties.getMaxNumberOfPolls(),
-        taskServiceProperties.getDefaultIntervalBetweenPolls());
+    CompletableFuture<Map> future =
+        CompletableFuture.supplyAsync(
+                () -> {
+                  return createAndWaitForCompletion(
+                      body,
+                      taskServiceProperties.getMaxNumberOfPolls(),
+                      taskServiceProperties.getDefaultIntervalBetweenPolls());
+                },
+                executorService)
+            .thenApply(
+                result -> {
+                  return result;
+                });
+
+    try {
+      return future.get();
+    } catch (InterruptedException | ExecutionException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /** @deprecated This pipeline operation does not belong here. */

@@ -44,4 +44,12 @@ class ImageService {
   List<String> findTags(String provider, String account, String repository, String selectorKey) {
     Retrofit2SyncCall.execute(clouddriverServiceSelector.select().findTags(provider, account, repository))
   }
+
+  List<Map> searchCharts(String provider, String query, String account, Integer count, Map<String, String> additionalFilters, String selectorKey) {
+    Retrofit2SyncCall.execute(clouddriverServiceSelector.select().findCharts(provider, query, account, count, additionalFilters))
+  }
+
+  List<String> findChartTags(String provider, String account, String repository, String selectorKey) {
+    Retrofit2SyncCall.execute(clouddriverServiceSelector.select().findChartTags(provider, account, repository))
+  }
 }

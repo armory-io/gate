@@ -237,6 +237,22 @@ public interface ClouddriverService {
       @Query("repository") String repository);
 
   @Headers("Accept: application/json")
+  @GET("/{provider}/charts/find")
+  Call<List<Map>> findCharts(
+      @Path("provider") String provider,
+      @Query("q") String query,
+      @Query("account") String account,
+      @Query("count") Integer count,
+      @QueryMap Map<String, String> additionalFilters);
+
+  @Headers("Accept: application/json")
+  @GET("/{provider}/charts/tags")
+  Call<List<String>> findChartTags(
+      @Path("provider") String provider,
+      @Query("account") String account,
+      @Query("repository") String repository);
+
+  @Headers("Accept: application/json")
   @GET("/search")
   Call<List<Map>> search(
       @Query("q") String query,

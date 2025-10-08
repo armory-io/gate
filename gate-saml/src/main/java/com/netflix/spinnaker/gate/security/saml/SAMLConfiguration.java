@@ -93,7 +93,13 @@ public class SAMLConfiguration {
       // requests
       if (properties.isSignRequests()) {
         builder.signingX509Credentials(c -> c.addAll(properties.getSigningCredentials()));
+        builder.assertingPartyDetails(
+          assertingPartyDetails -> assertingPartyDetails.wantAuthnRequestsSigned(true)
+        );
       }
+      builder.assertingPartyDetails(
+        assertingPartyDetails -> assertingPartyDetails.wantAuthnRequestsSigned(false)
+      );
       RelyingPartyRegistration registration = builder.build();
       return new InMemoryRelyingPartyRegistrationRepository(registration);
     }

@@ -20,25 +20,17 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import java.util.Collections;
 import java.util.List;
-import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 public class ExecutionsController {
 
-  private final boolean includeNestedExecutionsByDefault;
-
   private final OrcaServiceSelector orcaServiceSelector;
 
   @Autowired
-  public ExecutionsController(
-      OrcaServiceSelector orcaServiceSelector,
-      @Value("${orca.defaults.includeNestedExecutionsByDefault:false}")
-          boolean includeNestedExecutionsByDefault) {
+  public ExecutionsController(OrcaServiceSelector orcaServiceSelector) {
     this.orcaServiceSelector = orcaServiceSelector;
-    this.includeNestedExecutionsByDefault = includeNestedExecutionsByDefault;
   }
 
   @Operation(
@@ -74,8 +66,10 @@ public class ExecutionsController {
       @Parameter(
               description =
                   "Expands the pipeline refs to be real pipeline references AND the execution data.  For backwards compliant calls when pipeline ref is turned on.  Set to true or false lowercase as needed.  Defaults to false or a property on fallback")
-          @RequestParam(value = "includeNestedExecutions", defaultValue = "")
-          String includeNestedExecutions) {
+          @RequestParam(
+              value = "includeNestedExecutions",
+              defaultValue = "${orca.defaults.includeNestedExecutionsByDefault:false}")
+          boolean includeNestedExecutions) {
     if ((executionIds == null || executionIds.trim().isEmpty())
         && (pipelineConfigIds == null || pipelineConfigIds.trim().isEmpty())) {
       return Collections.emptyList();
@@ -84,14 +78,7 @@ public class ExecutionsController {
     return orcaServiceSelector
         .select()
         .getSubsetOfExecutions(
-            pipelineConfigIds,
-            executionIds,
-            limit,
-            statuses,
-            expand,
-            StringUtils.isBlank(includeNestedExecutions)
-                ? includeNestedExecutionsByDefault
-                : Boolean.parseBoolean(includeNestedExecutions));
+            pipelineConfigIds, executionIds, limit, statuses, expand, includeNestedExecutions);
   }
 
   @Operation(

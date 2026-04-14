@@ -57,7 +57,8 @@ public interface OrcaService {
       @Query("executionIds") String executionIds,
       @Query("limit") Integer limit,
       @Query("statuses") String statuses,
-      @Query("expand") boolean expand);
+      @Query("expand") boolean expand,
+      @Query("includeNestedExecutions") boolean includeNestedExecutions);
 
   @Headers("Accept: application/json")
   @GET("/applications/{application}/pipelines/search")

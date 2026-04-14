@@ -20,17 +20,25 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import java.util.Collections;
 import java.util.List;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 public class ExecutionsController {
 
-  private OrcaServiceSelector orcaServiceSelector;
+  private final boolean includeNestedExecutionsByDefault;
+
+  private final OrcaServiceSelector orcaServiceSelector;
 
   @Autowired
-  public ExecutionsController(OrcaServiceSelector orcaServiceSelector) {
+  public ExecutionsController(
+      OrcaServiceSelector orcaServiceSelector,
+      @Value("${orca.defaults.includeNestedExecutionsByDefault:false}")
+          boolean includeNestedExecutionsByDefault) {
     this.orcaServiceSelector = orcaServiceSelector;
+    this.includeNestedExecutionsByDefault = includeNestedExecutionsByDefault;
   }
 
   @Operation(
@@ -62,7 +70,12 @@ public class ExecutionsController {
               description =
                   "Expands each execution object in the resulting list. If this value is missing, it is defaulted to true.")
           @RequestParam(value = "expand", defaultValue = "true")
-          boolean expand) {
+          boolean expand,
+      @Parameter(
+              description =
+                  "Expands the pipeline refs to be real pipeline references AND the execution data.  For backwards compliant calls when pipeline ref is turned on.  Set to true or false lowercase as needed.  Defaults to false or a property on fallback")
+          @RequestParam(value = "includeNestedExecutions", defaultValue = "")
+          String includeNestedExecutions) {
     if ((executionIds == null || executionIds.trim().isEmpty())
         && (pipelineConfigIds == null || pipelineConfigIds.trim().isEmpty())) {
       return Collections.emptyList();
@@ -70,7 +83,15 @@ public class ExecutionsController {
 
     return orcaServiceSelector
         .select()
-        .getSubsetOfExecutions(pipelineConfigIds, executionIds, limit, statuses, expand);
+        .getSubsetOfExecutions(
+            pipelineConfigIds,
+            executionIds,
+            limit,
+            statuses,
+            expand,
+            StringUtils.isBlank(includeNestedExecutions)
+                ? includeNestedExecutionsByDefault
+                : Boolean.parseBoolean(includeNestedExecutions));
   }
 
   @Operation(

@@ -1,0 +1,39 @@
+gate-web/src/main/java/com/netflix/spinnaker/config/WebConfigOverrides.java
+  human 1-43
+---
+{
+  "attestations": [
+    {
+      "entries": [
+        {
+          "accepted_lines": 43,
+          "added_lines": 43,
+          "deleted_lines": 0,
+          "hash": "human",
+          "lines": "1-43",
+          "overridden_lines": 0
+        }
+      ],
+      "file": "gate-web/src/main/java/com/netflix/spinnaker/config/WebConfigOverrides.java"
+    }
+  ],
+  "base_commit_sha": "5e4739222d29f5b54569b0e02760efe238e1a5d2",
+  "branch": "fixcve-2026-22732",
+  "commit_sha": "aefbafa0785249976402dd63314a03b665089da1",
+  "commit_time": "2026-05-07T16:29:04-05:00",
+  "commit_type": "direct_commit",
+  "git_ai_version": "1.4.2",
+  "prompts": {
+    "human": {
+      "accepted_lines": 43,
+      "agent_id": null,
+      "human_author": "Jason McIntosh <jason.mcintosh@harness.io>",
+      "messages": [],
+      "overriden_lines": 0,
+      "total_additions": 43,
+      "total_deletions": 0
+    }
+  },
+  "repo": "git@github.com:armory-io/gate.git",
+  "schema_version": "authorship/3.0.0"
+}
